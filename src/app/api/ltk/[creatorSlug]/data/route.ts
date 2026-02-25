@@ -63,7 +63,7 @@ export async function GET(
       {
         params: {
           profile_id: profileId,
-          limit: 100,
+          limit: 50,
           date_published_start: dateStart,
           date_published_end: dateEnd,
           status: 'PUBLISHED',
