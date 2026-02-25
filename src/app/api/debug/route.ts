@@ -14,39 +14,33 @@ export async function GET() {
 
   const results: Record<string, unknown> = {};
   const headers = { Authorization: `Bearer ${accessToken}` };
+  const profileId = '6cc59976-d411-11e8-9fed-0242ac110002';
+  const publisherId = '293045';
+  const accountId = '278632';
 
-  // Try account_id (278632) instead of publisher_id (293045)
-  // Try with sigil_id UUID format
-  // Try different auth header formats
   const tests = [
-    // Different ID formats for hero_chart
-    { key: 'hero_account_id', url: `https://api-gateway.rewardstyle.com/analytics/hero_chart?range=last_30_days&publisher_id=278632` },
-    { key: 'hero_sigil', url: `https://api-gateway.rewardstyle.com/analytics/hero_chart?range=last_30_days&publisher_id=908757ef7a064ea0b6a3931d635e4318` },
-    // Publisher summary
-    { key: 'pub_summary', url: `https://api-gateway.rewardstyle.com/analytics/publisher/293045/summary?range=last_30_days` },
-    { key: 'pub_summary2', url: `https://api-gateway.rewardstyle.com/analytics/293045/summary?range=last_30_days` },
-    // LTK API without rewardstyle branding
-    { key: 'ltk_hero', url: `https://api-gateway.rewardstyle.com/analytics/hero?range=last_30_days&publisher_id=293045` },
-    // Check if there's a /me endpoint
-    { key: 'me', url: `https://api-gateway.rewardstyle.com/api/pub/v2/me` },
-    { key: 'me2', url: `https://creator-auth.shopltk.com/userinfo` },
-    // Try the RS analytics with RS-specific token header
-    { key: 'hero_rs_header', url: `https://api-gateway.rewardstyle.com/analytics/hero_chart?range=last_30_days&publisher_id=293045` },
-    // Try ltk.app
-    { key: 'ltk_app', url: `https://api-gateway.rewardstyle.com/api/ltk/v1/analytics?range=last_30_days&publisher_id=293045` },
-    // Check what the creator-analytics base paths give
-    { key: 'creator_analytics_root', url: `https://api-gateway.rewardstyle.com/api/creator-analytics/v1` },
-    // Try oauth userinfo - might have useful data
-    { key: 'userinfo', url: `https://prod-rs-influencer.us.auth0.com/userinfo` },
+    // Profile-based analytics
+    { key: 'profile_ltks', url: `https://api-gateway.rewardstyle.com/api/pub/v2/profiles/${profileId}/ltks?limit=20` },
+    { key: 'profile_links', url: `https://api-gateway.rewardstyle.com/api/pub/v2/profiles/${profileId}/links?limit=10` },
+    { key: 'publisher_summary', url: `https://api-gateway.rewardstyle.com/api/pub/v2/publishers/${publisherId}/summary` },
+    { key: 'publisher_analytics', url: `https://api-gateway.rewardstyle.com/api/pub/v2/publishers/${publisherId}/analytics?range=last_30_days` },
+    { key: 'account_analytics', url: `https://api-gateway.rewardstyle.com/api/pub/v2/accounts/${accountId}/analytics?range=last_30_days` },
+    // LTK specific
+    { key: 'ltks_list', url: `https://api-gateway.rewardstyle.com/api/ltk/v2/ltks?profile_id=${profileId}&limit=10` },
+    { key: 'ltk_v3', url: `https://api-gateway.rewardstyle.com/api/ltk/v3/ltks?profile_id=${profileId}&limit=5` },
+    // Nicki's posts via public API (no auth needed)
+    { key: 'public_ltks', url: `https://api-gateway.rewardstyle.com/api/ltk/v2/ltks?profile_id=${profileId}&limit=5&fields[]=id,hero_image_url,title,products` },
+    // Try the analytics with RS auth header format
+    { key: 'analytics_no_pid', url: `https://api-gateway.rewardstyle.com/api/creator-analytics/v1/performance_summary?range=last_30_days` },
   ];
 
   for (const test of tests) {
     try {
       const res = await axios.get(test.url, { headers, timeout: 8000 });
-      results[test.key] = { status: res.status, sample: JSON.stringify(res.data).slice(0, 300) };
+      results[test.key] = { status: res.status, sample: JSON.stringify(res.data).slice(0, 400) };
     } catch (e) {
       if (axios.isAxiosError(e)) {
-        results[test.key] = { status: e.response?.status ?? 'NO_RESPONSE', sample: JSON.stringify(e.response?.data ?? '').slice(0, 200) };
+        results[test.key] = { status: e.response?.status ?? 'NO_RESPONSE', sample: JSON.stringify(e.response?.data ?? '').slice(0, 150) };
       } else {
         results[test.key] = { error: String(e).slice(0, 100) };
       }
