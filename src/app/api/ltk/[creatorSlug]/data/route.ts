@@ -155,11 +155,7 @@ export async function GET(
     if (axios.isAxiosError(err) && err.response?.status === 401) {
       return NextResponse.json({ error: 'needs_reauth', slug: creatorSlug }, { status: 401 });
     }
-    const msg = err instanceof Error ? err.message : String(err);
-    const axiosDetail = axios.isAxiosError(err)
-      ? { status: err.response?.status, data: err.response?.data, code: err.code }
-      : null;
-    console.error(`[data:${creatorSlug}]`, msg, axiosDetail);
-    return NextResponse.json({ error: msg, detail: axiosDetail }, { status: 500 });
+    console.error(`[data:${creatorSlug}]`, err);
+    return NextResponse.json({ error: 'Failed to fetch data' }, { status: 500 });
   }
 }
