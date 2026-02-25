@@ -1,5 +1,5 @@
 import Airtable from 'airtable';
-import { airtableBase, TABLE_NAME } from './client';
+import { getAirtableBase, TABLE_NAME } from './client';
 import type { CreatorTokenRecord } from '@/types';
 
 function recordToCreator(record: Airtable.Record<Airtable.FieldSet>): CreatorTokenRecord {
@@ -20,13 +20,13 @@ function recordToCreator(record: Airtable.Record<Airtable.FieldSet>): CreatorTok
 export async function getCreatorBySlug(slug: string): Promise<CreatorTokenRecord | null> {
   try {
     // Try by Slug field first
-    let records = await airtableBase(TABLE_NAME)
+    let records = await getAirtableBase()(TABLE_NAME)
       .select({ filterByFormula: `{Slug} = "${slug}"`, maxRecords: 1 })
       .firstPage();
 
     if (!records.length) {
       // Fallback: try first record (for Nicki who may not have Slug set)
-      records = await airtableBase(TABLE_NAME)
+      records = await getAirtableBase()(TABLE_NAME)
         .select({ maxRecords: 1 })
         .firstPage();
     }
@@ -41,7 +41,7 @@ export async function getCreatorBySlug(slug: string): Promise<CreatorTokenRecord
 
 export async function getAllCreators(): Promise<CreatorTokenRecord[]> {
   try {
-    const records = await airtableBase(TABLE_NAME).select().all();
+    const records = await getAirtableBase()(TABLE_NAME).select().all();
     return records.map(recordToCreator);
   } catch (err) {
     console.error('[Airtable] getAllCreators error:', err);
@@ -65,7 +65,7 @@ export async function updateCreatorTokens(
   if (data.lastRefreshed !== undefined) fields['Last_Refreshed'] = data.lastRefreshed;
 
   try {
-    await airtableBase(TABLE_NAME).update(recordId, fields);
+    await getAirtableBase()(TABLE_NAME).update(recordId, fields);
   } catch (err) {
     console.error('[Airtable] updateCreatorTokens error:', err);
     throw err;
@@ -89,6 +89,6 @@ export async function upsertCreatorBySlug(
   if (existing) {
     await updateCreatorTokens(existing.id, data);
   } else {
-    await airtableBase(TABLE_NAME).create(fields);
+    await getAirtableBase()(TABLE_NAME).create(fields);
   }
 }
