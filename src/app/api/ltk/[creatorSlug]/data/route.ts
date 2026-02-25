@@ -1,39 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
-import axios from 'axios';
 import { getCreatorBySlug } from '@/lib/airtable/tokens';
 import { getValidToken } from '@/lib/ltk/token-manager';
+import { ensurePostsTable, getPostsByDateRange } from '@/lib/airtable/posts';
+import { syncCreatorPosts } from '@/lib/ltk/sync';
 
 const NICKI_PROFILE_ID = '6cc59976-d411-11e8-9fed-0242ac110002';
 
-interface LTKProduct {
-  id: string;
-  ltk_id: string;
-  hyperlink: string;
-  image_url: string;
-  retailer_display_name: string;
-}
-
-interface LTKPost {
-  id: string;
-  hash: string;
-  share_url: string;
-  hero_image: string;
-  caption: string;
-  date_published: string;
-  product_ids: string[];
-  status: string;
-}
-
-interface LTKApiResponse {
-  ltks: LTKPost[];
-  products: LTKProduct[];
-}
-
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ creatorSlug: string }> }
 ) {
   const { creatorSlug } = await params;
+
+  const url = new URL(req.url);
+  const today = new Date();
+  const dateEnd = url.searchParams.get('end') ?? today.toISOString().split('T')[0];
+  const defaultStart = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .split('T')[0];
+  const dateStart = url.searchParams.get('start') ?? defaultStart;
 
   try {
     const creator = await getCreatorBySlug(creatorSlug);
@@ -43,57 +28,32 @@ export async function GET(
 
     const profileId = creator.profileId ?? NICKI_PROFILE_ID;
 
-    // Get a valid access token
-    let token: string;
-    try {
-      token = await getValidToken(creatorSlug);
-    } catch {
-      return NextResponse.json({ error: 'needs_reauth', slug: creatorSlug }, { status: 401 });
-    }
+    await ensurePostsTable();
 
-    const today = new Date();
-    const thirtyDaysAgo = new Date(today);
-    thirtyDaysAgo.setDate(today.getDate() - 30);
+    let posts = await getPostsByDateRange(creatorSlug, dateStart, dateEnd);
 
-    const dateStart = thirtyDaysAgo.toISOString().split('T')[0];
-    const dateEnd = today.toISOString().split('T')[0];
-
-    const response = await axios.get<LTKApiResponse>(
-      'https://api-gateway.rewardstyle.com/api/ltk/v2/ltks',
-      {
-        params: {
-          profile_id: profileId,
-          limit: 50,
-          date_published_start: dateStart,
-          date_published_end: dateEnd,
-          status: 'PUBLISHED',
-        },
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        timeout: 30000,
+    // Auto-sync if no cached data for this range
+    if (posts.length === 0) {
+      let token: string;
+      try {
+        token = await getValidToken(creatorSlug);
+      } catch {
+        return NextResponse.json({ error: 'needs_reauth', slug: creatorSlug }, { status: 401 });
       }
-    );
 
-    const ltks: LTKPost[] = response.data.ltks ?? [];
-    const products: LTKProduct[] = response.data.products ?? [];
-
-    // Build a map of product_id -> product for quick lookup
-    const productMap = new Map<string, LTKProduct>();
-    for (const p of products) {
-      productMap.set(p.id, p);
+      await syncCreatorPosts(creatorSlug, profileId, token, dateStart, dateEnd);
+      posts = await getPostsByDateRange(creatorSlug, dateStart, dateEnd);
     }
 
-    // Posts per day — fill every day in the 30-day window with 0 initially
+    // Posts per day — fill every day in range with 0
     const postsPerDay: Record<string, number> = {};
-    for (let i = 0; i <= 30; i++) {
-      const d = new Date(thirtyDaysAgo);
-      d.setDate(thirtyDaysAgo.getDate() + i);
-      const key = d.toISOString().split('T')[0];
-      postsPerDay[key] = 0;
+    const startDate = new Date(dateStart + 'T00:00:00Z');
+    const endDate = new Date(dateEnd + 'T00:00:00Z');
+    for (const d = new Date(startDate); d <= endDate; d.setUTCDate(d.getUTCDate() + 1)) {
+      postsPerDay[d.toISOString().split('T')[0]] = 0;
     }
-    for (const post of ltks) {
-      const day = post.date_published.split('T')[0];
+    for (const post of posts) {
+      const day = post.datePublished;
       if (day in postsPerDay) {
         postsPerDay[day] = (postsPerDay[day] ?? 0) + 1;
       }
@@ -102,15 +62,16 @@ export async function GET(
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([date, count]) => ({ date, count }));
 
-    // Top retailers
+    // Top retailers from cached Retailers JSON field
     const retailerCounts: Record<string, number> = {};
-    for (const post of ltks) {
-      for (const pid of post.product_ids ?? []) {
-        const product = productMap.get(pid);
-        if (product?.retailer_display_name) {
-          const name = product.retailer_display_name;
+    for (const post of posts) {
+      try {
+        const retailers = JSON.parse(post.retailers) as string[];
+        for (const name of retailers) {
           retailerCounts[name] = (retailerCounts[name] ?? 0) + 1;
         }
+      } catch {
+        // ignore parse errors
       }
     }
     const topRetailers = Object.entries(retailerCounts)
@@ -118,27 +79,24 @@ export async function GET(
       .slice(0, 8)
       .map(([name, count]) => ({ name, count }));
 
-    // Avg posts per week
-    const postsCount = ltks.length;
-    const avgPostsPerWeek = parseFloat((postsCount / (30 / 7)).toFixed(1));
-
-    // Total products linked
-    const totalProducts = ltks.reduce((sum, p) => sum + (p.product_ids?.length ?? 0), 0);
-
-    // Top retailer name
+    const postsCount = posts.length;
+    const dayCount = Math.max(
+      1,
+      Math.round((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1
+    );
+    const avgPostsPerWeek = parseFloat((postsCount / (dayCount / 7)).toFixed(1));
+    const totalProducts = posts.reduce((sum, p) => sum + p.productCount, 0);
     const topRetailerName = topRetailers[0]?.name ?? '—';
 
     // Recent posts — 12 most recent
-    const sorted = [...ltks].sort(
-      (a, b) => new Date(b.date_published).getTime() - new Date(a.date_published).getTime()
-    );
+    const sorted = [...posts].sort((a, b) => b.datePublished.localeCompare(a.datePublished));
     const recentPosts = sorted.slice(0, 12).map((post) => ({
-      id: post.id,
-      share_url: post.share_url,
-      hero_image: post.hero_image,
+      id: post.postId,
+      share_url: post.shareUrl,
+      hero_image: post.heroImage,
       caption: post.caption,
-      date_published: post.date_published,
-      product_count: post.product_ids?.length ?? 0,
+      date_published: post.datePublished,
+      product_count: post.productCount,
     }));
 
     return NextResponse.json({
@@ -152,9 +110,6 @@ export async function GET(
       date_range: { start: dateStart, end: dateEnd },
     });
   } catch (err) {
-    if (axios.isAxiosError(err) && err.response?.status === 401) {
-      return NextResponse.json({ error: 'needs_reauth', slug: creatorSlug }, { status: 401 });
-    }
     console.error(`[data:${creatorSlug}]`, err);
     return NextResponse.json({ error: 'Failed to fetch data' }, { status: 500 });
   }

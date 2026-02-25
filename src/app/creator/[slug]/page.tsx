@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Image from 'next/image';
 import {
@@ -49,8 +49,18 @@ interface DashboardData {
   date_range: { start: string; end: string };
 }
 
+function toDateStr(d: Date): string {
+  return d.toISOString().split('T')[0];
+}
+
+function daysAgo(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return toDateStr(d);
+}
+
 function formatDate(iso: string): string {
-  const d = new Date(iso);
+  const d = new Date(iso + 'T00:00:00');
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
@@ -97,6 +107,13 @@ function CustomBarTooltip({ active, payload }: any) {
   );
 }
 
+const PRESETS = [
+  { label: '7d', days: 7 },
+  { label: '30d', days: 30 },
+  { label: '60d', days: 60 },
+  { label: '90d', days: 90 },
+] as const;
+
 export default function CreatorPage() {
   const params = useParams();
   const slug = params?.slug as string;
@@ -104,23 +121,74 @@ export default function CreatorPage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const [start, setStart] = useState(() => daysAgo(30));
+  const [end, setEnd] = useState(() => toDateStr(new Date()));
+  const [activePreset, setActivePreset] = useState<number | null>(30);
+
+  // Custom range inputs (not yet applied)
+  const [customStart, setCustomStart] = useState(start);
+  const [customEnd, setCustomEnd] = useState(end);
+
+  const fetchData = useCallback(
+    (s: string, e: string, isInitial = false) => {
+      if (!slug) return;
+      if (isInitial) setLoading(true);
+      else setRefreshing(true);
+
+      fetch(`/api/ltk/${slug}/data?start=${s}&end=${e}`, { cache: 'no-store' })
+        .then(async (res) => {
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.error ?? `HTTP ${res.status}`);
+          }
+          return res.json() as Promise<DashboardData>;
+        })
+        .then((d) => {
+          setData(d);
+          setError(null);
+        })
+        .catch((e: unknown) => {
+          setError(e instanceof Error ? e.message : 'Failed to load data');
+        })
+        .finally(() => {
+          setLoading(false);
+          setRefreshing(false);
+        });
+    },
+    [slug]
+  );
 
   useEffect(() => {
-    if (!slug) return;
-    fetch(`/api/ltk/${slug}/data`, { cache: 'no-store' })
-      .then(async (res) => {
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body.error ?? `HTTP ${res.status}`);
-        }
-        return res.json() as Promise<DashboardData>;
-      })
-      .then((d) => { setData(d); setLoading(false); })
-      .catch((e: unknown) => {
-        setError(e instanceof Error ? e.message : 'Failed to load data');
-        setLoading(false);
-      });
+    fetchData(start, end, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
+
+  function applyPreset(days: number) {
+    const s = daysAgo(days);
+    const e = toDateStr(new Date());
+    setStart(s);
+    setEnd(e);
+    setCustomStart(s);
+    setCustomEnd(e);
+    setActivePreset(days);
+    fetchData(s, e);
+  }
+
+  function applyCustomRange() {
+    if (!customStart || !customEnd || customStart > customEnd) return;
+    setStart(customStart);
+    setEnd(customEnd);
+    setActivePreset(null);
+    fetchData(customStart, customEnd);
+  }
+
+  const totalDays =
+    Math.round(
+      (new Date(end + 'T00:00:00').getTime() - new Date(start + 'T00:00:00').getTime()) /
+        (1000 * 60 * 60 * 24)
+    ) + 1;
 
   if (loading) {
     return (
@@ -164,35 +232,87 @@ export default function CreatorPage() {
 
   // Trim leading zero-days for cleaner chart
   const chartData = (() => {
-    let start = 0;
+    let startIdx = 0;
     for (let i = 0; i < data.posts_per_day.length; i++) {
-      if (data.posts_per_day[i].count > 0) { start = i; break; }
+      if (data.posts_per_day[i].count > 0) { startIdx = i; break; }
     }
-    return data.posts_per_day.slice(start);
+    return data.posts_per_day.slice(startIdx);
   })();
 
   const maxRetailerCount = data.top_retailers[0]?.count ?? 1;
+  const showCustomApply = activePreset === null;
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
 
       {/* Header */}
-      <div className="flex items-end justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold capitalize tracking-tight">{slug}</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             {formatDate(data.date_range.start)} – {formatDate(data.date_range.end)}
           </p>
         </div>
-        <Badge variant="secondary" className="text-xs font-medium">
-          Last 30 days
-        </Badge>
+
+        {/* Date Range Picker */}
+        <div className="flex flex-wrap items-center gap-2">
+          {PRESETS.map((p) => (
+            <button
+              key={p.days}
+              onClick={() => applyPreset(p.days)}
+              disabled={refreshing}
+              className={`px-3 py-1 text-xs font-medium rounded-full border transition-colors disabled:opacity-50 ${
+                activePreset === p.days
+                  ? 'bg-foreground text-background border-foreground'
+                  : 'bg-transparent text-muted-foreground border-border hover:border-foreground hover:text-foreground'
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+
+          {/* Custom date inputs */}
+          <div className="flex items-center gap-1.5">
+            <input
+              type="date"
+              value={customStart}
+              max={customEnd}
+              onChange={(e) => { setCustomStart(e.target.value); setActivePreset(null); }}
+              className="text-xs border border-border rounded px-2 py-1 bg-background text-foreground"
+            />
+            <span className="text-xs text-muted-foreground">–</span>
+            <input
+              type="date"
+              value={customEnd}
+              min={customStart}
+              max={toDateStr(new Date())}
+              onChange={(e) => { setCustomEnd(e.target.value); setActivePreset(null); }}
+              className="text-xs border border-border rounded px-2 py-1 bg-background text-foreground"
+            />
+            {showCustomApply && (
+              <button
+                onClick={applyCustomRange}
+                disabled={refreshing || !customStart || !customEnd || customStart > customEnd}
+                className="px-3 py-1 text-xs font-medium rounded-full bg-foreground text-background disabled:opacity-50"
+              >
+                Apply
+              </button>
+            )}
+          </div>
+        </div>
       </div>
+
+      {/* Skeleton overlay during refresh */}
+      {refreshing && (
+        <div className="fixed inset-0 bg-background/50 backdrop-blur-[1px] z-10 flex items-center justify-center">
+          <div className="text-sm text-muted-foreground animate-pulse">Loading…</div>
+        </div>
+      )}
 
       {/* Stat Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard label="Posts" value={data.posts_count.toString()} sub="published" />
-        <StatCard label="Avg / Week" value={data.avg_posts_per_week.toString()} sub="over 30 days" />
+        <StatCard label="Avg / Week" value={data.avg_posts_per_week.toString()} sub={`over ${totalDays} days`} />
         <StatCard label="Top Retailer" value={data.top_retailer} />
         <StatCard label="Products Linked" value={data.total_products.toLocaleString()} sub="across all posts" />
       </div>
@@ -220,7 +340,7 @@ export default function CreatorPage() {
                 tickLine={false}
                 axisLine={false}
                 tickFormatter={(v: unknown) => {
-                  const d = new Date(String(v));
+                  const d = new Date(String(v) + 'T00:00:00');
                   return `${d.getMonth() + 1}/${d.getDate()}`;
                 }}
                 interval={Math.floor(chartData.length / 6)}
@@ -307,7 +427,7 @@ export default function CreatorPage() {
                 <p className="text-xs text-muted-foreground">Active days</p>
                 <p className="text-2xl font-bold">
                   {data.posts_per_day.filter((d) => d.count > 0).length}
-                  <span className="text-sm font-normal text-muted-foreground ml-1">/ 30</span>
+                  <span className="text-sm font-normal text-muted-foreground ml-1">/ {totalDays}</span>
                 </p>
               </div>
             </div>
