@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { getAllCreators } from '@/lib/airtable/tokens';
 import { CreatorCard } from '@/components/dashboard/creator-card';
 

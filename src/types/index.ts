@@ -3,6 +3,7 @@ export interface CreatorTokenRecord {
   creator: string;
   slug: string;
   publisherId: string;
+  profileId?: string;
   accessToken: string;
   refreshToken: string;
   idToken?: string;
