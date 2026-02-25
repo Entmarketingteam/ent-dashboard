@@ -16,28 +16,38 @@ export async function GET() {
   const headers = { Authorization: `Bearer ${accessToken}` };
   const profileId = '6cc59976-d411-11e8-9fed-0242ac110002';
   const publisherId = '293045';
-  const accountId = '278632';
 
-  const tests = [
-    // Profile-based analytics
-    { key: 'profile_ltks', url: `https://api-gateway.rewardstyle.com/api/pub/v2/profiles/${profileId}/ltks?limit=20` },
-    { key: 'profile_links', url: `https://api-gateway.rewardstyle.com/api/pub/v2/profiles/${profileId}/links?limit=10` },
-    { key: 'publisher_summary', url: `https://api-gateway.rewardstyle.com/api/pub/v2/publishers/${publisherId}/summary` },
-    { key: 'publisher_analytics', url: `https://api-gateway.rewardstyle.com/api/pub/v2/publishers/${publisherId}/analytics?range=last_30_days` },
-    { key: 'account_analytics', url: `https://api-gateway.rewardstyle.com/api/pub/v2/accounts/${accountId}/analytics?range=last_30_days` },
-    // LTK specific
-    { key: 'ltks_list', url: `https://api-gateway.rewardstyle.com/api/ltk/v2/ltks?profile_id=${profileId}&limit=10` },
-    { key: 'ltk_v3', url: `https://api-gateway.rewardstyle.com/api/ltk/v3/ltks?profile_id=${profileId}&limit=5` },
-    // Nicki's posts via public API (no auth needed)
-    { key: 'public_ltks', url: `https://api-gateway.rewardstyle.com/api/ltk/v2/ltks?profile_id=${profileId}&limit=5&fields[]=id,hero_image_url,title,products` },
-    // Try the analytics with RS auth header format
-    { key: 'analytics_no_pid', url: `https://api-gateway.rewardstyle.com/api/creator-analytics/v1/performance_summary?range=last_30_days` },
+  // Get full ltks response first
+  try {
+    const res = await axios.get(
+      `https://api-gateway.rewardstyle.com/api/ltk/v2/ltks?profile_id=${profileId}&limit=3`,
+      { headers, timeout: 10000 }
+    );
+    results['ltks_full'] = res.data;
+  } catch (e) {
+    results['ltks_full'] = { error: String(e) };
+  }
+
+  // Try analytics endpoints under ltk/v2
+  const analyticsTests = [
+    { key: 'ltk_v2_analytics', url: `https://api-gateway.rewardstyle.com/api/ltk/v2/analytics?publisher_id=${publisherId}&range=last_30_days` },
+    { key: 'ltk_v2_profile_analytics', url: `https://api-gateway.rewardstyle.com/api/ltk/v2/profiles/${profileId}/analytics?range=last_30_days` },
+    { key: 'ltk_v2_profile_stats', url: `https://api-gateway.rewardstyle.com/api/ltk/v2/profiles/${profileId}/stats?range=last_30_days` },
+    { key: 'ltk_v2_earnings', url: `https://api-gateway.rewardstyle.com/api/ltk/v2/earnings?range=last_30_days` },
+    { key: 'ltk_v2_earnings_pub', url: `https://api-gateway.rewardstyle.com/api/ltk/v2/earnings?publisher_id=${publisherId}&range=last_30_days` },
+    { key: 'ltk_v2_clicks', url: `https://api-gateway.rewardstyle.com/api/ltk/v2/ltks/clicks?publisher_id=${publisherId}&range=last_30_days` },
+    // Try creator-analytics with v2
+    { key: 'ca_v2', url: `https://api-gateway.rewardstyle.com/api/creator-analytics/v2/performance_summary?range=last_30_days&publisher_id=${publisherId}` },
+    // Try the exact analytics path the LTK app would use
+    { key: 'analytics_dashboard', url: `https://api-gateway.rewardstyle.com/api/ltk/v2/analytics/dashboard?publisher_id=${publisherId}&range=last_30_days` },
+    // Publisher v3
+    { key: 'pub_v3_analytics', url: `https://api-gateway.rewardstyle.com/api/pub/v3/analytics?range=last_30_days` },
   ];
 
-  for (const test of tests) {
+  for (const test of analyticsTests) {
     try {
       const res = await axios.get(test.url, { headers, timeout: 8000 });
-      results[test.key] = { status: res.status, sample: JSON.stringify(res.data).slice(0, 400) };
+      results[test.key] = { status: res.status, sample: JSON.stringify(res.data).slice(0, 300) };
     } catch (e) {
       if (axios.isAxiosError(e)) {
         results[test.key] = { status: e.response?.status ?? 'NO_RESPONSE', sample: JSON.stringify(e.response?.data ?? '').slice(0, 150) };
