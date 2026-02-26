@@ -5,6 +5,7 @@ Build and ship a production Next.js dashboard that pulls LTK creator analytics. 
 
 ## BEFORE WRITING ANY CODE — Read These Docs
 Read every file in `docs/` in this order. They contain API specs, auth flows, Airtable schemas, and architecture diagrams you will need. Do not skip this.
+0. **Global failure modes reference** — https://github.com/Entmarketingteam/ent-playbook/blob/main/MASTER-FAILURE-MODES.md — consult this when stuck on deployments, auth, env vars, TypeScript, or build loops.
 1. `docs/LTK_AUTH.md` — Token rotation (the hard part)
 2. `docs/LTK_API.md` — Verified endpoints
 3. `docs/ARCHITECTURE.md` — System design
