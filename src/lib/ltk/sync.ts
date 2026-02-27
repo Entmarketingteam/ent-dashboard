@@ -34,8 +34,9 @@ export async function syncCreatorPosts(
   let currentEnd = end;
 
   while (true) {
+    const GATEWAY = process.env.LTK_API_GATEWAY ?? 'https://api-gateway.rewardstyle.com';
     const response = await axios.get<LTKApiResponse>(
-      'https://api-gateway.rewardstyle.com/api/ltk/v2/ltks',
+      `${GATEWAY}/api/ltk/v2/ltks`,
       {
         params: {
           profile_id: profileId,

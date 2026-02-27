@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getCreatorBySlug } from '@/lib/airtable/tokens';
 import { getValidToken } from '@/lib/ltk/token-manager';
+import { endpoints } from '@/lib/ltk/endpoints';
 import axios from 'axios';
-
-const LTK_API = 'https://api-gateway.rewardstyle.com/api/co-api/v1';
 
 export async function GET(
   req: NextRequest,
@@ -12,11 +11,7 @@ export async function GET(
   const { creatorSlug } = await params;
   const url = new URL(req.url);
 
-  const today = new Date();
-  const endDate = url.searchParams.get('end') ?? today.toISOString().split('T')[0];
-  const startDate =
-    url.searchParams.get('start') ??
-    new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+  const range = url.searchParams.get('range') ?? 'last_30_days';
 
   try {
     const creator = await getCreatorBySlug(creatorSlug);
@@ -35,73 +30,46 @@ export async function GET(
       'Content-Type': 'application/json',
     };
 
-    const [commissionsRes, performanceRes, itemsSoldRes] = await Promise.allSettled([
-      axios.get(`${LTK_API}/creator-analytics/v1/commissions_summary?currency=USD`, { headers }),
-      axios.get(
-        `${LTK_API}/creator-analytics/v1/performance_summary?start_date=${startDate}&end_date=${endDate}&timezone=UTC`,
-        { headers }
-      ),
-      axios.get(
-        `${LTK_API}/creator-analytics/v1/items_sold/?limit=100&start=${startDate}&end=${endDate}&currency=USD`,
-        { headers }
-      ),
+    const [earningsRes, engagementRes] = await Promise.allSettled([
+      axios.get(endpoints.earnings(range), { headers }),
+      axios.get(endpoints.engagement(range), { headers }),
     ]);
 
-    const commissions =
-      commissionsRes.status === 'fulfilled' ? commissionsRes.value.data : null;
-    const performance =
-      performanceRes.status === 'fulfilled' ? performanceRes.value.data : null;
-    const itemsSold =
-      itemsSoldRes.status === 'fulfilled' ? itemsSoldRes.value.data : null;
+    const earnings = earningsRes.status === 'fulfilled' ? earningsRes.value.data : null;
+    const engagement = engagementRes.status === 'fulfilled' ? engagementRes.value.data : null;
 
-    // Normalize commissions
-    const commissionData = commissions
+    // commissions field may be a number or nested object
+    const commissionValue = earnings
+      ? typeof earnings.commissions === 'object'
+        ? (earnings.commissions?.total ?? earnings.commissions?.amount ?? earnings.commissions)
+        : earnings.commissions
+      : null;
+
+    const commissionData = earnings
       ? {
-          total_earned: commissions.total_earned ?? commissions.total ?? null,
-          total_paid: commissions.total_paid ?? null,
-          pending: commissions.pending ?? null,
-          currency: commissions.currency ?? 'USD',
-          period: commissions.period ?? null,
+          total_earned: commissionValue ?? null,
+          pending: earnings.pending_payment ?? null,
+          currency: earnings.currency ?? 'USD',
         }
       : null;
 
-    // Normalize performance
-    const performanceData = performance
+    const performanceData = engagement
       ? {
-          clicks: performance.clicks ?? performance.total_clicks ?? null,
-          orders: performance.orders ?? performance.total_orders ?? null,
-          revenue: performance.revenue ?? performance.total_revenue ?? null,
-          conversion_rate: performance.conversion_rate ?? null,
-          avg_order_value: performance.avg_order_value ?? null,
+          clicks: engagement.product_clicks ?? null,
+          orders: engagement.orders ?? null,
+          revenue: engagement.total_sales ?? null,
+          items_sold: engagement.items_sold ?? null,
+          total_visits: engagement.total_visits ?? null,
         }
       : null;
-
-    // Normalize items sold — top products by revenue
-    const items: Array<Record<string, unknown>> = Array.isArray(itemsSold?.items_sold)
-      ? itemsSold.items_sold
-      : Array.isArray(itemsSold)
-      ? itemsSold
-      : [];
-
-    const topProducts = items
-      .map((item) => ({
-        title: item.product_title ?? item.title ?? 'Unknown',
-        retailer: item.retailer_display_name ?? item.retailer ?? '',
-        revenue: parseFloat(String(item.commission ?? item.revenue ?? 0)),
-        orders: item.order_count ?? item.quantity ?? 1,
-        image: item.hero_image ?? item.image ?? null,
-        url: item.share_url ?? item.url ?? null,
-      }))
-      .sort((a, b) => b.revenue - a.revenue)
-      .slice(0, 10);
 
     return NextResponse.json({
       slug: creatorSlug,
-      date_range: { start: startDate, end: endDate },
+      range,
       commissions: commissionData,
       performance: performanceData,
-      top_products: topProducts,
-      items_sold_count: items.length,
+      top_products: [],
+      items_sold_count: engagement?.items_sold ?? 0,
     });
   } catch (err) {
     console.error(`[ltk:earnings:${creatorSlug}]`, err);
