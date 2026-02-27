@@ -46,7 +46,7 @@ export async function GET(
       },
       {
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${token}, Version 3.1`,
           'Content-Type': 'application/json',
           'x-marketplace': 'www.amazon.com',
         },
