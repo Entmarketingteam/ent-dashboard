@@ -19,6 +19,36 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 
+type Tab = 'activity' | 'earnings';
+
+interface EarningsData {
+  slug: string;
+  date_range: { start: string; end: string };
+  commissions: {
+    total_earned: number | null;
+    total_paid: number | null;
+    pending: number | null;
+    currency: string;
+    period: string | null;
+  } | null;
+  performance: {
+    clicks: number | null;
+    orders: number | null;
+    revenue: number | null;
+    conversion_rate: number | null;
+    avg_order_value: number | null;
+  } | null;
+  top_products: Array<{
+    title: string;
+    retailer: string;
+    revenue: number;
+    orders: number;
+    image: string | null;
+    url: string | null;
+  }>;
+  items_sold_count: number;
+}
+
 interface PostsPerDay {
   date: string;
   count: number;
@@ -114,20 +144,41 @@ const PRESETS = [
   { label: '90d', days: 90 },
 ] as const;
 
+function fmt$(n: number | null): string {
+  if (n === null || n === undefined) return '—';
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
+}
+
+function PlatformPending({ name, reason }: { name: string; reason: string }) {
+  return (
+    <Card className="border-dashed">
+      <CardContent className="pt-6 pb-6 flex flex-col items-center justify-center text-center gap-2">
+        <p className="text-sm font-semibold text-muted-foreground">{name}</p>
+        <p className="text-xs text-muted-foreground/60 max-w-xs">{reason}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function CreatorPage() {
   const params = useParams();
   const slug = params?.slug as string;
+
+  const [activeTab, setActiveTab] = useState<Tab>('activity');
 
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  const [earningsData, setEarningsData] = useState<EarningsData | null>(null);
+  const [earningsLoading, setEarningsLoading] = useState(false);
+  const [earningsError, setEarningsError] = useState<string | null>(null);
+
   const [start, setStart] = useState(() => daysAgo(30));
   const [end, setEnd] = useState(() => toDateStr(new Date()));
   const [activePreset, setActivePreset] = useState<number | null>(30);
 
-  // Custom range inputs (not yet applied)
   const [customStart, setCustomStart] = useState(start);
   const [customEnd, setCustomEnd] = useState(end);
 
@@ -160,10 +211,37 @@ export default function CreatorPage() {
     [slug]
   );
 
+  const fetchEarnings = useCallback(
+    (s: string, e: string) => {
+      if (!slug) return;
+      setEarningsLoading(true);
+      fetch(`/api/ltk/${slug}/earnings?start=${s}&end=${e}`, { cache: 'no-store' })
+        .then(async (res) => {
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.error ?? `HTTP ${res.status}`);
+          }
+          return res.json() as Promise<EarningsData>;
+        })
+        .then((d) => { setEarningsData(d); setEarningsError(null); })
+        .catch((e: unknown) => { setEarningsError(e instanceof Error ? e.message : 'Failed to load earnings'); })
+        .finally(() => setEarningsLoading(false));
+    },
+    [slug]
+  );
+
   useEffect(() => {
     fetchData(start, end, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
+
+  // Fetch earnings when tab switches to earnings
+  useEffect(() => {
+    if (activeTab === 'earnings' && !earningsData && !earningsLoading) {
+      fetchEarnings(start, end);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   function applyPreset(days: number) {
     const s = daysAgo(days);
@@ -174,6 +252,7 @@ export default function CreatorPage() {
     setCustomEnd(e);
     setActivePreset(days);
     fetchData(s, e);
+    if (activeTab === 'earnings') { setEarningsData(null); fetchEarnings(s, e); }
   }
 
   function applyCustomRange() {
@@ -182,6 +261,7 @@ export default function CreatorPage() {
     setEnd(customEnd);
     setActivePreset(null);
     fetchData(customStart, customEnd);
+    if (activeTab === 'earnings') { setEarningsData(null); fetchEarnings(customStart, customEnd); }
   }
 
   const totalDays =
@@ -302,6 +382,23 @@ export default function CreatorPage() {
         </div>
       </div>
 
+      {/* Tab Bar */}
+      <div className="flex gap-1 border-b border-border">
+        {(['activity', 'earnings'] as Tab[]).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={`px-4 py-2 text-sm font-medium capitalize transition-colors border-b-2 -mb-px ${
+              activeTab === tab
+                ? 'border-foreground text-foreground'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {tab}
+          </button>
+        ))}
+      </div>
+
       {/* Skeleton overlay during refresh */}
       {refreshing && (
         <div className="fixed inset-0 bg-background/50 backdrop-blur-[1px] z-10 flex items-center justify-center">
@@ -309,7 +406,127 @@ export default function CreatorPage() {
         </div>
       )}
 
-      {/* Stat Cards */}
+      {/* ── EARNINGS TAB ── */}
+      {activeTab === 'earnings' && (
+        <div className="space-y-6">
+          {earningsLoading && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
+            </div>
+          )}
+          {earningsError && !earningsLoading && (
+            <Card className="border-destructive/50">
+              <CardContent className="pt-5 text-sm text-destructive">
+                {earningsError === 'needs_reauth'
+                  ? 'Token expired — go to Settings to re-authenticate.'
+                  : `Could not load earnings: ${earningsError}`}
+              </CardContent>
+            </Card>
+          )}
+          {earningsData && !earningsLoading && (
+            <>
+              {/* LTK Earnings Stats */}
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest mb-3">LTK</p>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <StatCard
+                    label="Total Earned"
+                    value={fmt$(earningsData.commissions?.total_earned ?? null)}
+                    sub={earningsData.commissions?.currency ?? 'USD'}
+                  />
+                  <StatCard
+                    label="Paid Out"
+                    value={fmt$(earningsData.commissions?.total_paid ?? null)}
+                  />
+                  <StatCard
+                    label="Pending"
+                    value={fmt$(earningsData.commissions?.pending ?? null)}
+                  />
+                  <StatCard
+                    label="Orders"
+                    value={earningsData.performance?.orders?.toLocaleString() ?? '—'}
+                    sub={earningsData.performance?.clicks ? `${earningsData.performance.clicks.toLocaleString()} clicks` : undefined}
+                  />
+                </div>
+              </div>
+
+              {/* LTK Performance Row */}
+              {earningsData.performance && (
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  <StatCard
+                    label="Revenue"
+                    value={fmt$(earningsData.performance.revenue)}
+                    sub="attributed sales"
+                  />
+                  <StatCard
+                    label="Avg Order Value"
+                    value={fmt$(earningsData.performance.avg_order_value)}
+                  />
+                  <StatCard
+                    label="Conversion"
+                    value={earningsData.performance.conversion_rate !== null
+                      ? `${(earningsData.performance.conversion_rate * 100).toFixed(1)}%`
+                      : '—'}
+                    sub="clicks → orders"
+                  />
+                </div>
+              )}
+
+              {/* Top Products */}
+              {earningsData.top_products.length > 0 && (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-widest">
+                      Top Products by Revenue
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {earningsData.top_products.map((p, i) => (
+                      <div key={i} className="flex items-center gap-3">
+                        {p.image && (
+                          <div className="relative w-10 h-10 rounded overflow-hidden bg-muted flex-shrink-0">
+                            <Image src={p.image} alt={p.title} fill unoptimized className="object-cover" />
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate">{p.title}</p>
+                          <p className="text-xs text-muted-foreground">{p.retailer}</p>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <p className="text-sm font-semibold">{fmt$(p.revenue)}</p>
+                          <p className="text-xs text-muted-foreground">{p.orders} orders</p>
+                        </div>
+                      </div>
+                    ))}
+                  </CardContent>
+                </Card>
+              )}
+            </>
+          )}
+
+          {/* Other platform stubs */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest mb-3">Other Platforms</p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <PlatformPending
+                name="Amazon Associates"
+                reason="Awaiting Creators API credentials from Associates Central → Tools → Creators API"
+              />
+              <PlatformPending
+                name="ShopMy"
+                reason="Pipeline built. Open n8n ShopMy CSV Processor, attach Airtable credential, save and activate."
+              />
+              <PlatformPending
+                name="Mavely"
+                reason="Workflow built. Add Nicki's email + password to Airtable table tbllD6GuMSSEuN0Nq."
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── ACTIVITY TAB ── */}
+      {activeTab === 'activity' && (<div className="space-y-6">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard label="Posts" value={data.posts_count.toString()} sub="published" />
         <StatCard label="Avg / Week" value={data.avg_posts_per_week.toString()} sub={`over ${totalDays} days`} />
@@ -495,6 +712,8 @@ export default function CreatorPage() {
           ))}
         </div>
       </div>
+
+      </div>)} {/* end activity tab */}
 
     </div>
   );
