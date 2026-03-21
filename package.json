@@ -3,10 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "dev": "doppler run -- next dev",
+    "build": "doppler run -- next build",
+    "start": "doppler run -- next start",
+    "lint": "eslint",
+    "dev:local": "next dev",
+    "build:local": "next build",
+    "start:local": "next start"
   },
   "dependencies": {
     "airtable": "^0.12.2",

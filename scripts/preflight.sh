@@ -57,14 +57,30 @@ fi
 pass "Node.js $(node -v)"
 
 # ────────────────────────────────────────────────────────────────
-# 2. Check / Create .env.local
+# 2. Check for Doppler or .env.local
 # ────────────────────────────────────────────────────────────────
-if [ ! -f .env.local ]; then
-  if [ -f .env.example ]; then
-    cp .env.example .env.local
-    warn "Created .env.local from .env.example"
+USE_DOPPLER=false
+
+if command -v doppler &> /dev/null; then
+  # Check if Doppler is configured for this project
+  if doppler secrets --only-names &> /dev/null; then
+    USE_DOPPLER=true
+    pass "Doppler CLI detected and configured"
+    # Export Doppler secrets into the current shell for preflight checks
+    eval "$(doppler secrets download --no-file --format env 2>/dev/null)" 2>/dev/null || true
   else
-    cat > .env.local << 'ENVEOF'
+    warn "Doppler CLI found but not configured. Run: doppler setup"
+    warn "Falling back to .env.local"
+  fi
+fi
+
+if [ "$USE_DOPPLER" = false ]; then
+  if [ ! -f .env.local ]; then
+    if [ -f .env.example ]; then
+      cp .env.example .env.local
+      warn "Created .env.local from .env.example"
+    else
+      cat > .env.local << 'ENVEOF'
 AIRTABLE_API_KEY=
 AIRTABLE_BASE_ID=appQnKyfyRyhHX44h
 LTK_AUTH_URL=https://creator-auth.shopltk.com/oauth/token
@@ -73,14 +89,15 @@ LTK_API_GATEWAY=https://api-gateway.rewardstyle.com
 LTK_CREATOR_API=https://creator-api-gateway.shopltk.com/v1
 CRON_SECRET=
 ENVEOF
-    warn "Created .env.local with defaults"
+      warn "Created .env.local with defaults"
+    fi
   fi
-fi
 
-# Source .env.local
-set -a
-source .env.local 2>/dev/null || true
-set +a
+  # Source .env.local
+  set -a
+  source .env.local 2>/dev/null || true
+  set +a
+fi
 
 # ────────────────────────────────────────────────────────────────
 # 3. Check Airtable API Key
@@ -100,15 +117,27 @@ if [ -z "$AIRTABLE_API_KEY" ] || [[ "$AIRTABLE_API_KEY" == *"REPLACE"* ]] || [[ 
   
   # Still empty? Human action needed.
   if [ -z "$AIRTABLE_API_KEY" ] || [[ "$AIRTABLE_API_KEY" == *"REPLACE"* ]]; then
-    human_action "Add your Airtable Personal Access Token to .env.local:
+    if [ "$USE_DOPPLER" = true ]; then
+      human_action "Add your Airtable Personal Access Token to Doppler:
 
 1. Go to https://airtable.com/create/tokens
 2. Click 'Create new token'
 3. Name: 'ENT Dashboard'
-4. Scopes: data.records:read, data.records:write, schema.bases:read, schema.bases:write  
+4. Scopes: data.records:read, data.records:write, schema.bases:read, schema.bases:write
+5. Access: Grant to base 'Claude Created LTK and AMAZON EARNINGS'
+6. Copy the token (starts with 'pat')
+7. Run: doppler secrets set AIRTABLE_API_KEY"
+    else
+      human_action "Add your Airtable Personal Access Token to .env.local:
+
+1. Go to https://airtable.com/create/tokens
+2. Click 'Create new token'
+3. Name: 'ENT Dashboard'
+4. Scopes: data.records:read, data.records:write, schema.bases:read, schema.bases:write
 5. Access: Grant to base 'Claude Created LTK and AMAZON EARNINGS'
 6. Copy the token (starts with 'pat')
 7. Open .env.local in this folder and paste it as the AIRTABLE_API_KEY value"
+    fi
   fi
 fi
 pass "Airtable API key present"
@@ -128,13 +157,23 @@ AT_HTTP_CODE=$(echo "$AT_RESPONSE" | tail -1)
 AT_BODY=$(echo "$AT_RESPONSE" | sed '$d')
 
 if [ "$AT_HTTP_CODE" = "401" ] || [ "$AT_HTTP_CODE" = "403" ]; then
-  human_action "Your Airtable API key is invalid or doesn't have access to the base.
+  if [ "$USE_DOPPLER" = true ]; then
+    human_action "Your Airtable API key is invalid or doesn't have access to the base.
+
+1. Go to https://airtable.com/create/tokens
+2. Edit your token or create a new one
+3. Make sure it has scopes: data.records:read, data.records:write
+4. Make sure it has access to base 'Claude Created LTK and AMAZON EARNINGS' (ID: appQnKyfyRyhHX44h)
+5. Run: doppler secrets set AIRTABLE_API_KEY"
+  else
+    human_action "Your Airtable API key is invalid or doesn't have access to the base.
 
 1. Go to https://airtable.com/create/tokens
 2. Edit your token or create a new one
 3. Make sure it has scopes: data.records:read, data.records:write
 4. Make sure it has access to base 'Claude Created LTK and AMAZON EARNINGS' (ID: appQnKyfyRyhHX44h)
 5. Update AIRTABLE_API_KEY in .env.local"
+  fi
 fi
 
 if [ "$AT_HTTP_CODE" = "404" ] || [ "$AT_HTTP_CODE" = "422" ]; then
@@ -202,10 +241,14 @@ fi
 # ────────────────────────────────────────────────────────────────
 if [ -z "$CRON_SECRET" ]; then
   CRON_SECRET=$(openssl rand -hex 32 2>/dev/null || cat /dev/urandom | head -c 32 | xxd -p 2>/dev/null || echo "default-cron-secret-$(date +%s)")
-  if grep -q "^CRON_SECRET=" .env.local; then
-    sed -i.bak "s|^CRON_SECRET=.*|CRON_SECRET=$CRON_SECRET|" .env.local
+  if [ "$USE_DOPPLER" = true ]; then
+    doppler secrets set CRON_SECRET="$CRON_SECRET" --silent 2>/dev/null || warn "Could not auto-set CRON_SECRET in Doppler. Run: doppler secrets set CRON_SECRET=$CRON_SECRET"
   else
-    echo "CRON_SECRET=$CRON_SECRET" >> .env.local
+    if grep -q "^CRON_SECRET=" .env.local; then
+      sed -i.bak "s|^CRON_SECRET=.*|CRON_SECRET=$CRON_SECRET|" .env.local
+    else
+      echo "CRON_SECRET=$CRON_SECRET" >> .env.local
+    fi
   fi
   pass "Generated CRON_SECRET"
 else
