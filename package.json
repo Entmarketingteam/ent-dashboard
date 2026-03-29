@@ -3,13 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "doppler run -- next dev",
-    "build": "doppler run -- next build",
-    "start": "doppler run -- next start",
-    "lint": "eslint",
-    "dev:local": "next dev",
-    "build:local": "next build",
-    "start:local": "next start"
+    "dev": "bash scripts/with-secrets.sh next dev",
+    "build": "bash scripts/with-secrets.sh next build",
+    "start": "bash scripts/with-secrets.sh next start",
+    "lint": "eslint"
   },
   "dependencies": {
     "airtable": "^0.12.2",
